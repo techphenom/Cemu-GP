@@ -9,7 +9,10 @@ git config --global --add safe.directory '*'
 
 echo "== copying the source"
 # Build outputs (the host's and this build's) stay out of the copy, and survive --delete.
-rsync -a --delete --exclude /bin/Cemu_release --exclude /bin/Cemu --exclude /build/ --exclude /gamepad-bridge/build/ \
+# --checksum --no-times: a changed file is copied with the current time, not its own. With -a's preserved times, a
+# file edited while the previous build ran was older than the object that build made from the old copy, and ninja
+# skipped it (fake-cemu --tone, 2026-10-14).
+rsync -a --checksum --no-times --delete --exclude /bin/Cemu_release --exclude /bin/Cemu --exclude /build/ --exclude /gamepad-bridge/build/ \
 	--exclude /.appimage-build/ --exclude /AppDir/ --exclude /dependencies/vcpkg/vcpkg \
 	--exclude /dependencies/vcpkg/downloads/ --exclude /dependencies/vcpkg/buildtrees/ \
 	--exclude /dependencies/vcpkg/packages/ /src/ /work/src/
