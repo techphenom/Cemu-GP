@@ -1,7 +1,8 @@
 // fake-cemu: the stub Cemu side (TASKS.md 5.3, "against a stub"). Connects to the bridge exactly as
 // the Cemu sink will, sends synthetic 854x480 DRC frames at 60 Hz, and checks what comes back.
 //
-// usage: fake-cemu [--seconds N] [--width W --height H]
+// usage: fake-cemu [--seconds N] [--width W --height H] [--tone HZ]
+// --tone: also send GamePad speaker audio (IPC 1.2): half-second beeps at HZ, alternating with silence.
 // Exit status 0 only if the handshake worked and FRAME_PRESENTED came back for submitted frames.
 #include "canvas.h"
 #include "clock.h"
@@ -10,7 +11,9 @@
 #include "socket_io.h"
 #include "stats.h"
 
+#include <algorithm>
 #include <cerrno>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -27,6 +30,7 @@ int main(int argc, char** argv)
 	log_set_tag("fake-cemu");
 	double seconds = 15;
 	uint32_t fw = 854, fh = 480; // Cemu's usual DRC framebuffer size
+	double tone_hz = 0;
 	for (int i = 1; i + 1 < argc; i += 2)
 	{
 		if (!strcmp(argv[i], "--seconds"))
@@ -35,6 +39,8 @@ int main(int argc, char** argv)
 			fw = uint32_t(atoi(argv[i + 1]));
 		else if (!strcmp(argv[i], "--height"))
 			fh = uint32_t(atoi(argv[i + 1]));
+		else if (!strcmp(argv[i], "--tone"))
+			tone_hz = atof(argv[i + 1]);
 	}
 
 	const std::string dir = runtime_dir();
@@ -84,8 +90,14 @@ int main(int argc, char** argv)
 	uint32_t last_buttons = 0;
 	uint32_t last_touch = 0;
 
+	if (tone_hz > 0 && w->version_minor < 2)
+		LOGW("bridge speaks IPC %u.%u, no audio before 1.2: not sending the tone", w->version_major, w->version_minor);
+	const bool tone = tone_hz > 0 && w->version_minor >= 2;
+	uint64_t audio_frames_sent = 0;
+
 	const int64_t period = 1'000'000'000 / 60;
-	const int64_t t_end = now_ns() + int64_t(seconds * 1e9);
+	const int64_t t_start = now_ns();
+	const int64_t t_end = t_start + int64_t(seconds * 1e9);
 	int64_t next = now_ns();
 	while (now_ns() < t_end)
 	{
@@ -171,12 +183,33 @@ int main(int argc, char** argv)
 			if (flip_times.size() > 120)
 				flip_times.erase(flip_times.begin());
 		}
+		// Audio, paced like Cemu's AX output: whatever is due since the start, in messages of at most 144 frames
+		const uint64_t audio_due = uint64_t(now_ns() - t_start) * DRCB_AUDIO_RATE / 1'000'000'000;
+		while (tone && audio_frames_sent < audio_due)
+		{
+			struct
+			{
+				drcb_audio a;
+				int16_t s[144 * 2];
+			} m{};
+			const uint32_t n = uint32_t(std::min<uint64_t>(144, audio_due - audio_frames_sent));
+			m.a = drcb_audio{now_ns(), DRCB_AUDIO_RATE, 2, uint16_t(n)};
+			for (uint32_t i = 0; i < n; i++)
+			{
+				const uint64_t f = audio_frames_sent + i;
+				const bool on = (f / (DRCB_AUDIO_RATE / 2)) % 2 == 0;
+				const int16_t v = on ? int16_t(8000 * std::sin(2 * M_PI * tone_hz * double(f) / DRCB_AUDIO_RATE)) : 0;
+				m.s[i * 2] = m.s[i * 2 + 1] = v;
+			}
+			send_msg(sock, DRCB_MSG_AUDIO, static_cast<const void*>(&m), uint32_t(sizeof(drcb_audio) + n * 4));
+			audio_frames_sent += n;
+		}
 		next += period;
 	}
 
-	LOGI("done: %llu submitted, %llu dropped (no free slot), %llu presented, %llu input messages",
+	LOGI("done: %llu submitted, %llu dropped (no free slot), %llu presented, %llu input messages, %.1f s of audio sent",
 		 (unsigned long long)submitted, (unsigned long long)dropped, (unsigned long long)presented,
-		 (unsigned long long)inputs);
+		 (unsigned long long)inputs, double(audio_frames_sent) / DRCB_AUDIO_RATE);
 	st_flip_to_presented.report_and_clear(seconds);
 	send_msg(sock, DRCB_MSG_GOODBYE, drcb_goodbye{DRCB_BYE_NORMAL, 0});
 	close(sock);

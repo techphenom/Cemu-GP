@@ -43,11 +43,13 @@ Turn the GamePad on and start a game, from Cemu or from a frontend like ES-DE.
 - Games that draw nothing on the GamePad (Super Smash Bros. for Wii U) show the TV picture on it instead. You can turn
   that off in the GamePad tab.
 - Input settings has a **Wii U GamePad** controller and profile, if you want the GamePad somewhere else.
+- The GamePad's speaker plays the game's GamePad sound; its volume slider sets how loud. To hear it only there, turn off
+  the **Gamepad** device in Options > General settings > Audio (otherwise the PC plays it too).
 - **Reset** in the GamePad tab forgets the GamePad and the adapter.
 
 ## Status
 
-Early release. Tested on one PC (Bazzite) with one GamePad, an RT5572 adapter. Not done yet: GamePad audio and microphone, the camera, and a single download.
+Early release. Tested with one GamePad and an RT5572 adapter on Bazzite, Arch Linux and SteamOS. Not done yet: the GamePad's microphone and camera, and a single download.
 
 ## Why Linux only
 

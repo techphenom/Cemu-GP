@@ -1,4 +1,4 @@
-// Cemu <-> GamePad bridge IPC, version 1.1. Normative; docs/IPC.md explains it.
+// Cemu <-> GamePad bridge IPC, version 1.2. Normative; docs/IPC.md explains it.
 // Self-contained on purpose: the Cemu fork carries a verbatim copy of this file.
 // Plain C-compatible structs, host byte order (same machine), CLOCK_MONOTONIC nanoseconds.
 #pragma once
@@ -7,7 +7,7 @@
 
 #define DRCB_MAGIC 0x42435244u /* "DRCB" little-endian */
 #define DRCB_VERSION_MAJOR 1
-#define DRCB_VERSION_MINOR 1
+#define DRCB_VERSION_MINOR 2
 
 #define DRCB_SOCKET_DIR "cemu-gamepad" /* under $XDG_RUNTIME_DIR */
 #define DRCB_SOCKET_NAME "bridge.sock"
@@ -23,6 +23,7 @@ enum drcb_msg_type
 	DRCB_MSG_FRAME_RELEASE = 11,
 	DRCB_MSG_FRAME_PRESENTED = 12,
 	DRCB_MSG_INPUT_STATE = 20,
+	DRCB_MSG_AUDIO = 30, // 1.2
 	DRCB_MSG_PAD_STATUS = 40,
 	DRCB_MSG_GOODBYE = 99,
 };
@@ -180,8 +181,22 @@ struct drcb_goodbye
 	uint32_t reserved;
 };
 
+// 1.2: the GamePad speaker's audio, Cemu -> bridge, sent only to a bridge whose WELCOME says 1.2 or later. 48 kHz,
+// interleaved stereo s16; `frames` sample frames (frames * channels int16_t) follow the struct in the same message.
+#define DRCB_AUDIO_RATE 48000
+#define DRCB_AUDIO_MAX_FRAMES 512
+struct drcb_audio
+{
+	int64_t t_mixed_ns; // Cemu mixed it
+	uint32_t sample_rate; // DRCB_AUDIO_RATE
+	uint16_t channels; // 2
+	uint16_t frames; // <= DRCB_AUDIO_MAX_FRAMES
+};
+
 #ifdef __cplusplus
 static_assert(sizeof(drcb_header) == 16, "drcb_header layout");
 static_assert(sizeof(drcb_frame_submit) == 48, "drcb_frame_submit layout");
 static_assert(sizeof(drcb_input_state) == 72, "drcb_input_state layout");
+static_assert(sizeof(drcb_audio) == 16, "drcb_audio layout");
+static_assert(sizeof(drcb_header) + sizeof(drcb_audio) + DRCB_AUDIO_MAX_FRAMES * 4 <= DRCB_MAX_PACKET, "drcb_audio size");
 #endif

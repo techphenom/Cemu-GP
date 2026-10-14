@@ -23,6 +23,8 @@ public:
 	// this returns, so the handler must copy what it needs.
 	std::function<void(const drcb_frame_submit&, const uint8_t* pixels, int64_t t_received_ns)> on_frame;
 	std::function<void(bool attached)> on_attach_changed;
+	// GamePad speaker audio (IPC 1.2): interleaved stereo s16 at 48 kHz, valid only during the call.
+	std::function<void(const int16_t* stereo, uint32_t frames)> on_audio;
 
 	static constexpr uint32_t kSlots = 3;
 
@@ -33,6 +35,7 @@ private:
 	ShmSlots m_slots;
 	uint32_t m_max_w, m_max_h;
 	bool m_ready = false;
+	bool m_logged_bad_audio = false;
 	// Pad state to report in WELCOME.
 	bool m_pad_connected = false;
 	drcb_pad_source m_pad_source = DRCB_PAD_NONE;

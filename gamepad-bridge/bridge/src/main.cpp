@@ -361,7 +361,8 @@ int main(int argc, char** argv)
 	};
 	std::unordered_map<uint64_t, InFlight> in_flight; // pad frame id -> origin
 	int64_t last_pad_submit_ns = 0;
-	uint64_t drops_pad = 0, cemu_frames = 0, repeats = 0;
+	uint64_t drops_pad = 0, cemu_frames = 0, repeats = 0, cemu_audio_frames = 0;
+	int64_t last_audio_ns = 0; // "cemu audio arriving" after a gap
 
 	StageStats st_flip_to_submit("cemu flip->submit");
 	StageStats st_submit_to_rx("cemu submit->bridge rx");
@@ -446,6 +447,15 @@ int main(int argc, char** argv)
 		have_cemu_frame = true;
 		last_cemu_frame_ns = now_ns();
 		submit_to_pad(s.frame_id, s.t_flip_ns);
+	};
+	cemu.on_audio = [&](const int16_t* stereo, uint32_t frames) {
+		const int64_t t = now_ns();
+		if (t - last_audio_ns > 1'000'000'000) // first, or after a gap (game silent, Cemu reattached)
+			LOGI("cemu audio arriving");
+		last_audio_ns = t;
+		cemu_audio_frames += frames;
+		if (pad)
+			pad->push_audio(stereo, frames);
 	};
 	cemu.on_attach_changed = [&](bool attached) {
 		have_cemu_frame = false;
@@ -559,11 +569,12 @@ int main(int argc, char** argv)
 		const int64_t t = now_ns();
 		const double window = double(t - last_report) / 1e9;
 		last_report = t;
-		LOGI("stats window %.1fs: cemu %s, pad %s, cemu frames %llu, idle frames so far %llu, repeats %llu, pad drops %llu",
+		LOGI("stats window %.1fs: cemu %s, pad %s, cemu frames %llu, idle frames so far %llu, repeats %llu, pad drops %llu, "
+			 "cemu audio %.2f s",
 			 window, cemu.attached() ? "attached" : "detached", pad && pad->connected() ? "connected" : "none",
 			 (unsigned long long)cemu_frames, (unsigned long long)idle_frames, (unsigned long long)repeats,
-			 (unsigned long long)drops_pad);
-		cemu_frames = repeats = drops_pad = 0;
+			 (unsigned long long)drops_pad, double(cemu_audio_frames) / DRCB_AUDIO_RATE);
+		cemu_frames = repeats = drops_pad = cemu_audio_frames = 0;
 		for (StageStats* s : {&st_flip_to_submit, &st_submit_to_rx, &st_rx_to_pad, &st_convert, &st_encode,
 							  &st_pad_to_presented, &st_flip_to_presented, &st_pad_interval})
 			s->report_and_clear(window);

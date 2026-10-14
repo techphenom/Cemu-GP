@@ -57,6 +57,7 @@ void CemuLink::handle(const Message& msg)
 			return;
 		}
 		m_ready = true;
+		m_logged_bad_audio = false;
 		char name[sizeof(hello->client_name) + 1]{};
 		memcpy(name, hello->client_name, sizeof(hello->client_name));
 		LOGI("cemu attached: \"%s\" pid %u, IPC %u.%u", name, hello->pid, hello->version_major, hello->version_minor);
@@ -82,6 +83,24 @@ void CemuLink::handle(const Message& msg)
 			on_frame(*s, m_slots.slot(s->slot), t_rx);
 		drcb_frame_release r{s->slot, 0};
 		send_msg(m_server.client(), DRCB_MSG_FRAME_RELEASE, r);
+		break;
+	}
+	case DRCB_MSG_AUDIO: {
+		auto* a = msg.as<drcb_audio>();
+		if (!m_ready || !a)
+			return;
+		// Audio isn't worth dropping Cemu over: a bad message is skipped (and reported once per connection)
+		if (a->sample_rate != DRCB_AUDIO_RATE || a->channels != 2 || a->frames > DRCB_AUDIO_MAX_FRAMES ||
+			msg.header.payload_size < sizeof(drcb_audio) + a->frames * 4u)
+		{
+			if (!m_logged_bad_audio)
+				LOGW("cemu: skipping malformed AUDIO (%u Hz, %u channels, %u frames, %u bytes)", a->sample_rate,
+					 a->channels, a->frames, msg.header.payload_size);
+			m_logged_bad_audio = true;
+			return;
+		}
+		if (on_audio)
+			on_audio(reinterpret_cast<const int16_t*>(msg.payload + sizeof(drcb_audio)), a->frames);
 		break;
 	}
 	case DRCB_MSG_GOODBYE:

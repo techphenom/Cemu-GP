@@ -4,7 +4,8 @@
 // Fork-only. Protocol: drcbridge_ipc.h (IPC v1). Settings: config/GamePadBridgeConfig.h.
 //
 // Threading: OnDrcFlip / BeginFrame / EndFrame / Shutdown run on the render thread. A receiver
-// thread reads bridge messages; it never touches the video path except to mark slots free.
+// thread reads bridge messages; it never touches the video path except to mark slots free. SubmitAudio runs on
+// the AX thread and sends under sockMutex, which Disconnect takes before closing the socket.
 
 class LatteTextureView;
 struct drcb_input_state;
@@ -51,6 +52,13 @@ namespace GamePadSink
 	// last 500 ms: pad off or out of range, bridge not connected, or no title running (the sink connects from flips).
 	// Read by the "WiiUGamePad" input API (input/api/GamePadBridge).
 	bool LatestInput(drcb_input_state& out);
+
+	// ---- audio (the AX thread) ----
+	// Whether the GamePad speaker's audio is wanted: connected to a bridge that takes it (IPC 1.2+).
+	bool AudioActive();
+	// The GamePad's mix for the pad's speaker: interleaved stereo s16 at 48 kHz. Never blocks; dropped when the
+	// bridge can't take it right now.
+	void SubmitAudio(const sint16* stereo, uint32 frames);
 
 	// Title stopped: say goodbye and disconnect.
 	void Shutdown();

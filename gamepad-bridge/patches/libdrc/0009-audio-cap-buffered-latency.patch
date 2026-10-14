@@ -1,0 +1,29 @@
+diff --git a/src/audio-streamer.cpp b/src/audio-streamer.cpp
+--- a/src/audio-streamer.cpp
++++ b/src/audio-streamer.cpp
+@@ -47,6 +47,10 @@
+ const u32 kSamplesPerPacket = 384;
+ const u32 kPacketIntervalMs = 1000 / (kSamplesPerSecond / kSamplesPerPacket);
+ 
++// Playback starts once two packets are buffered (PopSamples), so this leaves room for ~6 packets of jitter
++const u32 kMaxBufferedMs = 64;
++const size_t kMaxBufferedValues = kSamplesPerSecond * 2 * kMaxBufferedMs / 1000;  // stereo: 2 values per frame
++
+ s32 GetTimestamp() {
+   u64 tsf;
+   GetTsf(&tsf);
+@@ -107,8 +111,12 @@
+ 
+ void AudioStreamer::PushSamples(const std::vector<s16>& samples) {
+   std::lock_guard<std::mutex> lk(samples_mutex_);
+-  if (samples_.size() < kSamplesPerSecond * 32) {  // limit buffer size
+-    samples_.insert(samples_.end(), samples.begin(), samples.end());
++  // cemu-gamepad project (patches/libdrc/0009): keep at most kMaxBufferedMs of audio, dropping the oldest. The old
++  // limit (32 s of samples, appended until full) let delay build up to 16 s whenever the source ran ahead of the
++  // 8 ms send timer, and then kept new samples out instead of old ones. Dropped in whole stereo frames.
++  samples_.insert(samples_.end(), samples.begin(), samples.end());
++  if (samples_.size() > kMaxBufferedValues) {
++    samples_.erase(samples_.begin(), samples_.begin() + (samples_.size() - kMaxBufferedValues));
+   }
+ }
+ 

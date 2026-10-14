@@ -29,6 +29,11 @@ namespace GamePadSink
 		constexpr uint32 kPadWidth = 854, kPadHeight = 480;
 		constexpr sint64 kInputStaleNs = 500'000'000; // the pad sends input ~180 times a second
 
+		// audio sends (AX thread) vs the render thread closing the socket: Disconnect clears audioReady under it first
+		std::mutex sockMutex;
+		std::atomic<bool> audioReady{false};
+		std::atomic<uint64> audioSent{0}, audioDropped{0};
+
 		// latest input: written by the receiver thread, read by the input thread
 		std::mutex inputMutex;
 		drcb_input_state latestInput{};
@@ -207,6 +212,10 @@ namespace GamePadSink
 			}
 			if (s.sock < 0)
 				return;
+			{
+				std::lock_guard lock(sockMutex);
+				audioReady = false;
+			}
 			if (sendGoodbye)
 			{
 				drcb_goodbye bye{DRCB_BYE_NORMAL, 0};
@@ -224,8 +233,9 @@ namespace GamePadSink
 			s.lostConnection = false;
 			s.presented = s.presentedAtomic.exchange(0);
 			cemuLog_log(LogType::Force, "GamePad Bridge: disconnected. Frames submitted {}, dropped (no free slot) {}, "
-										"dropped (capture busy) {}, presented {}",
-						s.submitted, s.droppedNoSlot, s.droppedCapture, s.presented);
+										"dropped (capture busy) {}, presented {}. Audio sent {:.1f} s, dropped {:.1f} s",
+						s.submitted, s.droppedNoSlot, s.droppedCapture, s.presented,
+						double(audioSent.exchange(0)) / DRCB_AUDIO_RATE, double(audioDropped.exchange(0)) / DRCB_AUDIO_RATE);
 			s.submitted = s.droppedNoSlot = s.droppedCapture = 0;
 		}
 
@@ -306,6 +316,8 @@ namespace GamePadSink
 			s.lostConnection = false;
 			s.ready = true;
 			s.receiver = std::thread(ReceiverThread);
+			// a 1.0/1.1 bridge has no AUDIO message: it would ignore them, but don't send 333 a second for nothing
+			audioReady = w->version_minor >= 2;
 
 			Notice(s.padConnected ? "GamePad Bridge connected" : "GamePad Bridge connected (no GamePad attached yet)", 3000);
 			return true;
@@ -527,6 +539,37 @@ namespace GamePadSink
 		return true;
 #else
 		return false;
+#endif
+	}
+
+	bool AudioActive()
+	{
+#if BOOST_OS_LINUX
+		return audioReady.load(std::memory_order_relaxed);
+#else
+		return false;
+#endif
+	}
+
+	void SubmitAudio(const sint16* stereo, uint32 frames)
+	{
+#if BOOST_OS_LINUX
+		frames = std::min<uint32>(frames, DRCB_AUDIO_MAX_FRAMES);
+		uint8 buf[sizeof(drcb_header) + sizeof(drcb_audio) + DRCB_AUDIO_MAX_FRAMES * 4];
+		const uint32 size = sizeof(drcb_audio) + frames * 4;
+		drcb_header h{DRCB_MAGIC, DRCB_VERSION_MAJOR, DRCB_MSG_AUDIO, size, 0};
+		drcb_audio a{NowNs(), DRCB_AUDIO_RATE, 2, uint16(frames)};
+		memcpy(buf, &h, sizeof(h));
+		memcpy(buf + sizeof(h), &a, sizeof(a));
+		memcpy(buf + sizeof(h) + sizeof(a), stereo, size_t(frames) * 4);
+		std::lock_guard lock(sockMutex);
+		if (!audioReady || s.lostConnection)
+			return;
+		// MSG_DONTWAIT: the AX thread never waits for the bridge; a full socket drops this block
+		if (send(s.sock, buf, sizeof(h) + size, MSG_NOSIGNAL | MSG_DONTWAIT) == ssize_t(sizeof(h) + size))
+			audioSent.fetch_add(frames, std::memory_order_relaxed);
+		else
+			audioDropped.fetch_add(frames, std::memory_order_relaxed);
 #endif
 	}
 

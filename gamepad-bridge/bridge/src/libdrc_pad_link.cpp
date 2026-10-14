@@ -253,6 +253,14 @@ int LibdrcPadLink::battery_level() const
 	return m->battery_level.load(std::memory_order_relaxed);
 }
 
+void LibdrcPadLink::push_audio(const int16_t* stereo, uint32_t frames)
+{
+	// libdrc's AudioStreamer sends 8 ms packets on its own timer and plays silence when short; patch 0009 caps
+	// what it holds, so a burst from Cemu can't build up delay
+	if (m_started)
+		m->aud_streamer.PushSamples(std::vector<drc::s16>(stereo, stereo + size_t(frames) * 2));
+}
+
 void LibdrcPadLink::on_input_event()
 {
 	uint64_t n;

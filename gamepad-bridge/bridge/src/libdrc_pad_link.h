@@ -31,6 +31,7 @@ public:
 	// libdrc encodes inside its VideoStreamer; the bridge must not encode as well.
 	bool wants_encoded() const override { return false; }
 	int battery_level() const override;
+	void push_audio(const int16_t* stereo, uint32_t frames) override;
 
 private:
 	struct Impl;

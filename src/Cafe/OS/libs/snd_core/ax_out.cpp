@@ -4,6 +4,7 @@
 #include "audio/IAudioAPI.h"
 //#include "ax.h"
 #include "config/CemuConfig.h"
+#include "Cafe/GamePad/GamePadSink.h"
 
 namespace snd_core
 {
@@ -326,9 +327,29 @@ namespace snd_core
 		}
 	}
 
+	// GamePad Bridge (fork): the real GamePad's speaker gets the same mix as Cemu's GamePad audio device, as stereo
+	// (6ch mode plays only its first two channels, like the DMA path below; mono goes to both sides). Full volume:
+	// the pad's own volume slider sets its loudness.
+	static void SubmitDRCAudioToBridge(sint32 numSamples)
+	{
+		if (!GamePadSink::AudioActive())
+			return;
+		const sint32* ch0 = __AXDRCBuffer48.GetPtr();
+		const sint32* ch1 = __AXMode[AX_DEV_DRC] == AX_MODE_MONO ? ch0 : ch0 + numSamples;
+		sint16 stereo[AX_SAMPLES_MAX * 2];
+		numSamples = std::min<sint32>(numSamples, AX_SAMPLES_MAX);
+		for (sint32 i = 0; i < numSamples; i++)
+		{
+			stereo[i * 2 + 0] = (sint16)std::clamp<sint32>(_swapEndianS32(ch0[i]), -32768, 32767);
+			stereo[i * 2 + 1] = (sint16)std::clamp<sint32>(_swapEndianS32(ch1[i]), -32768, 32767);
+		}
+		GamePadSink::SubmitAudio(stereo, (uint32)numSamples);
+	}
+
 	void AXOut_SubmitDRCFrame(sint32 frameIndex)
 	{
 		sint32 numSamples = AIGetSamplesPerChannel(AX_DEV_DRC);
+		SubmitDRCAudioToBridge(numSamples);
 		if (__AXMode[AX_DEV_DRC] == AX_MODE_6CH)
 		{
 			sint32* inputChannel0 = __AXDRCBuffer48.GetPtr() + numSamples * 0;

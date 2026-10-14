@@ -39,6 +39,8 @@ public:
 	virtual bool wants_encoded() const = 0;
 	// The pad's battery: VanillaBatteryStatus 0-6 (HidExtra::battery_level), or -1 if this link doesn't know.
 	virtual int battery_level() const { return -1; }
+	// Audio for the pad's speaker: interleaved stereo s16 at 48 kHz. Never blocks. Links without a speaker ignore it.
+	virtual void push_audio(const int16_t* stereo, uint32_t frames) { (void)stereo; (void)frames; }
 
 	std::function<void(uint64_t pad_frame_id, int64_t t_presented_ns, uint32_t flags)> on_presented;
 	std::function<void(const drcb_input_state&)> on_input;

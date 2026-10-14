@@ -1,4 +1,4 @@
-# Cemu ↔ bridge IPC, version 1.1
+# Cemu ↔ bridge IPC, version 1.2
 
 Normative definition: `bridge/include/drcbridge/ipc.h`. This document explains it. If they disagree,
 the header wins and this doc gets fixed.
@@ -71,10 +71,11 @@ the encoder's 864×480 (`PROTOCOL.md`).
 | 11 | B→C | `FRAME_RELEASE` | slot |
 | 12 | B→C | `FRAME_PRESENTED` | frame_id, t_presented, flags |
 | 20 | B→C | `INPUT_STATE` | seq, t_received, buttons, sticks, touch, accel, gyro |
+| 30 | C→B | `AUDIO` (1.2) | t_mixed, sample rate, channels, frames; then the samples |
 | 40 | B→C | `PAD_STATUS` | connected, source (none / mock / real), battery |
 | 99 | both | `GOODBYE` | reason |
 
-Audio (DRC speaker) is reserved for a minor version later (Phase 3).
+Audio for the GamePad's speaker arrived in 1.2 (below). The microphone is still to come.
 
 ### Input
 
@@ -115,3 +116,22 @@ chunk sizes), then the raw chunks. The mock pad rebuilds Annex-B exactly like li
 (`bridge/src/drc_annexb.cpp`) and decodes with libavcodec. Encoded frames are decoded in order and never
 skipped, since each P frame references the previous one. Cemu still only sends `RGBA8`; a 1.0 Cemu works
 unchanged with a 1.1 bridge.
+
+### 1.2: the GamePad speaker's audio
+
+`AUDIO` (Cemu → bridge) carries the GamePad's mix as **48 kHz interleaved stereo s16**: a `drcb_audio` header
+(`t_mixed_ns`, `sample_rate` = 48000, `channels` = 2, `frames` ≤ 512), then `frames × 2` samples in the same
+packet. Unlike frames, audio is small enough to go through the socket.
+
+- **Cemu** sends one message per AX frame (144 frames = 3 ms) from the AX thread, taken from the GamePad mix
+  before Cemu's own GamePad audio device (`ax_out.cpp`): the pad gets sound whether or not a PC device is set for
+  the GamePad. 6-channel mode sends its first two channels, mono goes to both sides. Full volume: the pad's own slider
+  sets its loudness. Sends use `MSG_DONTWAIT`, so the AX thread never waits; a full socket drops the block.
+- **Only to a 1.2 bridge:** Cemu sends `AUDIO` only when `WELCOME` says minor ≥ 2. A 1.1 bridge would ignore the
+  messages anyway, but there's no point in 333 a second.
+- **The bridge** skips a malformed `AUDIO` (wrong rate, channel count or size) and logs it once per connection,
+  instead of dropping Cemu as it does for a bad `FRAME_SUBMIT`: losing audio isn't worth losing the picture. It hands
+  the samples to libdrc's `AudioStreamer` (real pad only), which sends one 384-frame packet every 8 ms on its own
+  timer and plays silence when it's short. libdrc patch 0009 caps what it holds at 64 ms, dropping the oldest, so
+  a burst from Cemu can't build up delay. The stats line reports `cemu audio <s>` per window (≈ the window's length
+  while a game plays sound).
