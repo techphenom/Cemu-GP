@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # The GamePad's network, for playing: the RT5572 (rt2800usb) as the normal-mode AP the pad is paired to, 192.168.1.10,
 # DHCP (pad = 192.168.1.11), firewalld zone trusted for that interface. Root-only parts only: the bridge and Cemu
 # run as you (scripts/play.sh). Stays up until Ctrl-C,
@@ -21,9 +21,16 @@ PSK="" ADAPTER_MAC=""
 # Channel 165 (5825 MHz), not 36: home routers often use 36-64 at 80/160 MHz, and sharing the air with the PC's own
 # internet traffic cost 40-70 video resyncs per second in testing. 165 is outside the 149-161 block too, and it's the
 # channel a real Wii U used.
-CHAN=${CHAN:-165}
+# Without a regulatory country set ("iw reg get": country 00), Linux may forbid starting a network on 165 ("no IR"); the
+# pad scans for its console, so the first allowed channel in this order is used instead. CHAN= in the environment wins.
+CHAN_ORDER="165 161 157 153 149 48 44 40 36"
+CHAN=${CHAN:-}
 root=$(cd "$(dirname "$0")/.." && pwd)
-hostapd=$root/build/drc-hostap/hostapd/hostapd
+# bin/: the AppImage's bundled programs (dist/linux/appimage.sh). The system's iw, dnsmasq and ethtool come first;
+# the bundled ones are for systems without them (SteamOS can't keep installed packages across updates).
+PATH=$PATH:$root/bin
+hostapd=$root/bin/hostapd
+[ -x "$hostapd" ] || hostapd=$root/build/drc-hostap/hostapd/hostapd
 SERVICE=${SERVICE:-0}
 CAPTURE=${CAPTURE:-$([ "$SERVICE" = 1 ] && echo 0 || echo 1)}
 if [ "$SERVICE" = 1 ]; then
@@ -57,15 +64,27 @@ for d in /sys/class/net/*; do
   [ "$(basename "$(readlink -f "$d/device/driver" 2>/dev/null)")" = rt2800usb ] && [ "$(cat "$d/type")" != 1 ] && iw dev "$(basename "$d")" del && echo "removed leftover monitor interface $(basename "$d")"
 done
 
-if pgrep -f "drc-hostap/hostapd/hostapd " >/dev/null; then   # by hand or the installed service
+if pgrep -f "(drc-hostap/hostapd|cemu-gamepad/bin)/hostapd " >/dev/null; then   # by hand or the installed service
   echo "a pad network (hostapd) is already running, probably an earlier pad-net.sh:" >&2
-  pgrep -fa "drc-hostap/hostapd/hostapd " | sed 's/^/   /' >&2
+  pgrep -fa "(drc-hostap/hostapd|cemu-gamepad/bin)/hostapd " | sed 's/^/   /' >&2
   systemctl is-active -q cemu-gamepad-net.service && echo "it's the installed service: sudo systemctl stop cemu-gamepad-net" >&2
   echo "Ctrl-C it in its terminal, or if that terminal is gone:  sudo pkill -f build/drc-hostap/hostapd/hostapd; sudo pkill -f 'dnsmasq --conf-file=$root/runs'" >&2
   exit 1
 fi
 IF=$(rtif)
 [ -n "$IF" ] || { echo "the GamePad's Wi-Fi adapter isn't plugged in" >&2; exit 0; }
+# Channels this adapter may start a network on: not disabled, no "no IR", no radar detection
+ap_channel_ok() {
+  iw phy "$(basename "$(readlink -f "/sys/class/net/$IF/phy80211")")" channels 2>/dev/null | awk -v ch="$1" '
+    /^[[:space:]]*\* [0-9.]+ MHz \[[0-9]+\]/ { if (cur == ch) exit; cur = $0; sub(/.*\[/, "", cur); sub(/\].*/, "", cur); bad = ($0 ~ /disabled/); next }
+    tolower($0) ~ /no ir|no-ir|radar/ { bad = 1 }
+    END { exit !(cur == ch && !bad) }'
+}
+if [ -z "$CHAN" ]; then
+  for c in $CHAN_ORDER; do ap_channel_ok "$c" && { CHAN=$c; break; }; done
+  [ -n "$CHAN" ] || { echo "no 5 GHz channel the GamePad uses is allowed for a network here; set your country: iw reg set <XX>" >&2; CHAN=165; }
+  [ "$CHAN" = 165 ] || echo "== channel 165 isn't allowed here (Wi-Fi country not set?), using $CHAN"
+fi
 # The pad needs packets stamped with this adapter's TSF. Stock kernels don't export it; libdrc (patch 0008) then
 # reads it over USB, which needs read-write access to the adapter's /dev/bus/usb node: a runtime udev rule tags this
 # adapter (its vendor:product) uaccess, so the logged-in user's bridge gets it. (The patched mac80211's

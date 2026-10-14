@@ -54,3 +54,5 @@ bin/graphicPacks/*
 
 # Ignore Finder view option files created by OS X
 .DS_Store
+# AppImage build (dist/linux/build-appimage.sh)
+.appimage-build/

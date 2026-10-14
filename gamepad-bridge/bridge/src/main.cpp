@@ -43,6 +43,7 @@ struct Config
 	std::string replay_file;   // pad=replay: HID replay file (TASKS.md 8.5)
 	std::string tsf_source;    // pad=real: EXPERIMENTAL substitute for the Wi-Fi TSF (libdrc patch 0005)
 	bool replay_loop = false;
+	bool exit_with_parent = false; // started by Cemu: stop when Cemu exits
 };
 
 void usage()
@@ -51,6 +52,7 @@ void usage()
 			"usage: cemu-gamepad-bridge [--config FILE] [--pad mock|none|real] [--replay FILE.hid [--replay-loop]]\n"
 			"                           [--video h264|raw] [--log-level debug|info|warn] [--tsf-source ptp:/dev/ptpN|monotonic]\n"
 			"                           [--stats-interval SECONDS] [--dsu-port PORT|0] [--uinput] [--allow-root]\n"
+			"                           [--exit-with-parent]\n"
 			"Config file: key = value lines (pad, log_level, stats_interval_s, max_frame_width, max_frame_height).\n"
 			"Default config: $XDG_CONFIG_HOME/cemu-gamepad/bridge.conf (optional).\n");
 }
@@ -213,6 +215,8 @@ int main(int argc, char** argv)
 			cli.emplace_back("tsf_source", next());
 		else if (a == "--replay-loop")
 			cli.emplace_back("replay_loop", "on");
+		else if (a == "--exit-with-parent")
+			cfg.exit_with_parent = true;
 		else
 		{
 			usage();
@@ -283,6 +287,18 @@ int main(int argc, char** argv)
 			LOGI("signal %u: shutting down", si.ssi_signo);
 		loop.stop();
 	});
+	if (cfg.exit_with_parent)
+	{
+		// Started by Cemu (GamePadBridgeProcess): when Cemu exits, this process is reparented.
+		const pid_t parent = getppid();
+		loop.add_timer(500'000'000, [&loop, parent] {
+			if (getppid() != parent)
+			{
+				LOGI("the program that started the bridge exited: shutting down");
+				loop.stop();
+			}
+		});
+	}
 
 	std::unique_ptr<PadLink> pad;
 	if (cfg.pad == "mock")

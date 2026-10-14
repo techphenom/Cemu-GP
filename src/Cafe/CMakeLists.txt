@@ -4,6 +4,8 @@ add_library(CemuCafe
   Account/Account.h
   CafeSystem.cpp
   CafeSystem.h
+  GamePad/GamePadBridgeProcess.cpp
+  GamePad/GamePadBridgeProcess.h
   GamePad/GamePadSink.cpp
   GamePad/GamePadSink.h
   GamePad/SyncPattern.cpp

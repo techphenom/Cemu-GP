@@ -1,4 +1,5 @@
-#!/usr/bin/env bash
+#!/bin/bash
+# /bin/bash, not "/usr/bin/env bash": inside the AppImage, linuxdeploy's checkrt preload (exec.so) crashes env.
 # GamePad setup helper, driven by Cemu's "Set up GamePad" window (and usable by hand).
 #
 #   gamepad-setup.sh list               no root. One line per Wi-Fi adapter, tab-separated:
@@ -12,6 +13,9 @@
 #                                       Closing stdin cancels. Details: /var/log/cemu-gamepad/<ts>-setup.log
 #   gamepad-setup.sh install-user       no root. The bridge's user service (after a successful setup).
 #   sudo gamepad-setup.sh reset         root. Undo setup (network off, pairing forgotten, adapter given back).
+#   sudo gamepad-setup.sh uninstall     root. reset, then remove the GamePad network service and its files.
+#
+# From the AppImage: Cemu.AppImage gamepad-setup <command> (pkexec Cemu.AppImage gamepad-setup ... for root).
 #
 # What an adapter needs (docs/STATUS.md, docs/PROTOCOL.md "TSF"):
 #  1. host a 5 GHz access point (the pad only uses 5 GHz), on a channel the regulatory domain allows us to start on;
@@ -21,9 +25,16 @@
 #     TSF (ath9k, newer mt76) could work later; not implemented, so they're "no" for now.
 set -uo pipefail
 root=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
-hostapd=$root/build/drc-hostap/hostapd/hostapd
-hostapd_cli=$root/build/drc-hostap/hostapd/hostapd_cli
-tsf_probe=$root/build/bridge/tsf-probe
+# From the AppImage, the programs are in bin/ (dist/linux/appimage.sh); built from source, in build/. The system's
+# iw and ethtool come first; the bundled ones are for systems without them.
+PATH=$PATH:$root/bin
+if [ -x "$root/bin/hostapd" ]; then
+  hostapd=$root/bin/hostapd hostapd_cli=$root/bin/hostapd_cli tsf_probe=$root/bin/tsf-probe
+else
+  hostapd=$root/build/drc-hostap/hostapd/hostapd
+  hostapd_cli=$root/build/drc-hostap/hostapd/hostapd_cli
+  tsf_probe=$root/build/bridge/tsf-probe
+fi
 etc=/etc/cemu-gamepad
 PAD_CHANNELS="36 40 44 48 149 153 157 161 165"   # 5 GHz channels without radar detection; 165 is what we play on
 PAIR_CHANNELS="36 44 149"   # the pad found the pairing AP on 36 in ~6 s every time (docs/PAIRING.md:11, :82)
@@ -114,7 +125,10 @@ cmd_install_user() {
 }
 
 # ---- setup (root) ----
-gui() { echo "$*" >&3; }
+# The window's progress lines go to a copy of stdout on a free fd (bash picks one, 10+), not a fixed 3: from the
+# AppImage, the runtime keeps the AppImage mounted through a pipe on fd 3/4, and taking it over unmounts our own files.
+gui_fd=1
+gui() { echo "$*" >&"$gui_fd"; }
 fail() { gui "RESULT fails $1"; echo "FAILED: $1"; exit 1; }
 # Cancelled when the window closes our stdin (EOF; read's status 1). Waits up to $1 s, or until the pattern $2
 # shows up in file $3. Returns 1 if cancelled.
@@ -130,7 +144,7 @@ wait_or_cancel() {
 
 cmd_setup() {
   local ifc=$1
-  exec 3>&1
+  exec {gui_fd}>&1
   [ "$(id -u)" -eq 0 ] || { gui "RESULT fails needs administrator rights"; exit 1; }
   mkdir -p /var/log/cemu-gamepad
   local log; log=/var/log/cemu-gamepad/$(date +%Y%m%d-%H%M%S)-setup.log
@@ -281,11 +295,22 @@ cmd_reset() {
   echo "GamePad setup reset. Open Cemu > Settings > GamePad > Set up GamePad to start over."
 }
 
+# reset, then remove what install-system.sh installed (the AppImage has no install.sh to uninstall with)
+cmd_uninstall() {
+  cmd_reset
+  systemctl disable cemu-gamepad-net.service 2>/dev/null
+  rm -f /etc/systemd/system/cemu-gamepad-net.service
+  rm -rf /usr/local/libexec/cemu-gamepad /var/lib/cemu-gamepad /var/log/cemu-gamepad /run/cemu-gamepad
+  systemctl daemon-reload
+  echo "GamePad network service removed."
+}
+
 case ${1:-} in
   list) cmd_list ;;
   reset) cmd_reset ;;
+  uninstall) [ "$(id -u)" -eq 0 ] || { echo "run as root" >&2; exit 1; }; cmd_uninstall ;;
   status) cmd_status ;;
   setup) [ -n "${2:-}" ] || { echo "usage: $0 setup IFACE" >&2; exit 2; }; cmd_setup "$2" ;;
   install-user) cmd_install_user ;;
-  *) echo "usage: $0 list | status | setup IFACE | install-user | reset" >&2; exit 2 ;;
+  *) echo "usage: $0 list | status | setup IFACE | install-user | reset | uninstall" >&2; exit 2 ;;
 esac

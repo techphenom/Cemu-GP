@@ -16,9 +16,16 @@ else works exactly like normal Cemu (the original README is further down).
 
 ## Install
 
-For now, Cemu and the GamePad bridge are built from source: Cemu as usual ([BUILD.md](BUILD.md)), then the bridge
-with `gamepad-bridge/build.sh` and `gamepad-bridge/scripts/install.sh` (see [gamepad-bridge/README.md](gamepad-bridge/README.md)).
-A single download is planned.
+**AppImage (any distribution, SteamOS included):** one file with Cemu and the GamePad bridge. Build it with
+`dist/linux/build-appimage.sh` (needs podman or docker); it ends up in `.appimage-build/artifacts/`. Make it
+executable and run it; nothing else to install. Cemu starts the bridge itself, and GamePad setup (below) installs the
+GamePad's network service. To remove that service later: `pkexec ./Cemu-*.AppImage gamepad-setup uninstall`.
+
+On **SteamOS**: set a password once (`passwd` in Konsole; setup asks for it), do the setup below in Desktop Mode,
+then play in Game Mode (add the AppImage to Steam, or point ES-DE at it).
+
+**From source:** Cemu as usual ([BUILD.md](BUILD.md)), then the bridge with `gamepad-bridge/build.sh` and
+`gamepad-bridge/scripts/install.sh` (see [gamepad-bridge/README.md](gamepad-bridge/README.md)).
 
 ## Set up (once)
 

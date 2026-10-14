@@ -1,4 +1,5 @@
 #include "wxgui/GamePadSetupDialog.h"
+#include "Cafe/GamePad/GamePadBridgeProcess.h"
 
 #include <wx/button.h>
 #include <wx/filename.h>
@@ -15,27 +16,54 @@
 
 namespace
 {
-	// The helper: $CEMU_GAMEPAD_SETUP, else ~/.local/bin/cemu-gamepad-setup (the bridge's install.sh links it there),
-	// else cemu-gamepad-setup on PATH. pkexec needs an absolute path, so PATH hits are resolved.
-	wxString FindHelper()
+	// Programs are started by absolute path: in the AppImage, linuxdeploy's checkrt preload (exec.so) crashes the
+	// child when exec is given a bare name.
+	wxString FindOnPath(const wxString& name)
 	{
-		wxString env;
-		if (wxGetEnv("CEMU_GAMEPAD_SETUP", &env) && wxFileName::IsFileExecutable(env))
-			return env;
-		const wxString local = wxFileName::GetHomeDir() + "/.local/bin/cemu-gamepad-setup";
-		if (wxFileName::IsFileExecutable(local))
-			return local;
 		wxString path;
 		if (wxGetEnv("PATH", &path))
 		{
 			for (const auto& dir : wxSplit(path, ':'))
 			{
-				const wxString candidate = dir + "/cemu-gamepad-setup";
+				const wxString candidate = dir + "/" + name;
 				if (!dir.empty() && wxFileName::IsFileExecutable(candidate))
 					return candidate;
 			}
 		}
 		return {};
+	}
+
+	// The helper: $CEMU_GAMEPAD_SETUP, else the bundled one (AppImage, or gamepad-bridge/ next to a source build), else
+	// ~/.local/bin/cemu-gamepad-setup (the bridge's install.sh links it there), else cemu-gamepad-setup on PATH.
+	// pkexec needs an absolute path, so PATH hits are resolved.
+	wxString FindHelper()
+	{
+		wxString env;
+		if (wxGetEnv("CEMU_GAMEPAD_SETUP", &env) && wxFileName::IsFileExecutable(env))
+			return env;
+		if (const fs::path root = GamePadBridgeProcess::BundleRoot(); !root.empty())
+		{
+			const wxString bundled = wxString::FromUTF8(_pathToUtf8(root / "scripts/gamepad-setup.sh"));
+			if (wxFileName::IsFileExecutable(bundled))
+				return bundled;
+		}
+		const wxString local = wxFileName::GetHomeDir() + "/.local/bin/cemu-gamepad-setup";
+		if (wxFileName::IsFileExecutable(local))
+			return local;
+		return FindOnPath("cemu-gamepad-setup");
+	}
+
+	// A helper command that needs root, through pkexec. From the AppImage, pkexec runs the AppImage itself
+	// ("<AppImage> gamepad-setup ..."): root can't read inside the AppImage's mount, which belongs to the user.
+	wxString RootCommand(const wxString& helper, const wxString& args)
+	{
+		wxString pkexec = FindOnPath("pkexec");
+		if (pkexec.empty())
+			pkexec = "/usr/bin/pkexec";
+		const fs::path appImage = GamePadBridgeProcess::AppImageFile();
+		if (!appImage.empty())
+			return wxString::Format("\"%s\" \"%s\" gamepad-setup %s", pkexec, wxString::FromUTF8(_pathToUtf8(appImage)), args);
+		return wxString::Format("\"%s\" \"%s\" %s", pkexec, helper, args);
 	}
 
 	wxArrayString RunHelper(const wxString& helper, const wxString& args)
@@ -97,7 +125,7 @@ bool GamePadSetupDialog::RunReset(wxWindow* parent)
 	wxBusyCursor busy;
 	wxArrayString out, err;
 	// Synchronous is fine here: reset doesn't wait on anything (it stops the network service and deletes files).
-	const long rv = wxExecute(wxString::Format("pkexec \"%s\" reset", helper), out, err, wxEXEC_SYNC);
+	const long rv = wxExecute(RootCommand(helper, "reset"), out, err, wxEXEC_SYNC);
 	if (rv == 126 || rv == 127)
 		return false; // password dialog dismissed
 	if (rv != 0)
@@ -288,7 +316,7 @@ void GamePadSetupDialog::OnNext(wxCommandEvent&)
 
 	m_proc = new wxProcess(this);
 	m_proc->Redirect();
-	if (wxExecute(wxString::Format("pkexec \"%s\" setup \"%s\"", m_helper, row->iface), wxEXEC_ASYNC, m_proc) <= 0)
+	if (wxExecute(RootCommand(m_helper, wxString::Format("setup \"%s\"", row->iface)), wxEXEC_ASYNC, m_proc) <= 0)
 	{
 		delete m_proc;
 		m_proc = nullptr;
@@ -405,9 +433,10 @@ void GamePadSetupDialog::OnProcessEnded(wxProcessEvent& event)
 
 	if (m_succeeded)
 	{
-		// The bridge's user service. Not waited for: a blocking wait here once hung Cemu for good (the service start
-		// waited on the GamePad network, which wasn't up).
-		wxExecute(wxString::Format("\"%s\" install-user", m_helper), wxEXEC_ASYNC);
+		// The bridge's user service (source builds; from the AppImage, Cemu starts the bridge itself). Not waited for:
+		// a blocking wait here once hung Cemu for good (the service start waited on the GamePad network, which wasn't up).
+		if (!GamePadBridgeProcess::InAppImage())
+			wxExecute(wxString::Format("\"%s\" install-user", m_helper), wxEXEC_ASYNC);
 		m_doneTitle->SetLabel(_("All set!"));
 		m_doneText->SetLabel(_("Turn on the GamePad and start a game."));
 		ShowPage(kPageDone);

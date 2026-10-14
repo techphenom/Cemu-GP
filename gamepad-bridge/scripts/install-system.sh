@@ -1,22 +1,41 @@
-#!/usr/bin/env bash
-# The root half of scripts/install.sh (run that one): copies what the GamePad network needs out of the repo into
-# /usr/local/libexec/cemu-gamepad (system services can't run files from a home directory under SELinux), and installs
-# cemu-gamepad-net.service plus the udev rule that starts it whenever the RT5572 is plugged in.
+#!/bin/bash
+# The root half of scripts/install.sh (run that one), also run by GamePad setup: copies what the GamePad network needs
+# out of the repo or the AppImage into /usr/local/libexec/cemu-gamepad (system services can't run files from a home
+# directory under SELinux, nor from the user's AppImage mount), or /var/lib/cemu-gamepad where /usr is read-only
+# (SteamOS), and installs cemu-gamepad-net.service plus the udev rule that starts it whenever the RT5572 is plugged in.
 set -euo pipefail
 [ "$(id -u)" -eq 0 ] || { echo "run scripts/install.sh (as yourself) instead" >&2; exit 1; }
 root=$(cd "$(dirname "$0")/.." && pwd)
 dest=/usr/local/libexec/cemu-gamepad
+if ! { mkdir -p /usr/local/libexec 2>/dev/null && [ -w /usr/local/libexec ]; }; then
+  dest=/var/lib/cemu-gamepad   # read-only /usr (SteamOS)
+fi
 new=$dest.new
 rm -rf "$new"
-mkdir -p "$new/scripts" "$new/harness" "$new/build/drc-hostap/hostapd"
+mkdir -p "$new/scripts" "$new/harness"
 install -m 755 "$root/scripts/pad-net.sh" "$new/scripts/"
 install -m 644 "$root/harness/dnsmasq.conf" "$new/harness/"
 install -m 600 "$root/harness/hostapd-normal.conf" "$new/harness/"   # template; the key comes from /etc/cemu-gamepad/pad.conf
-install -m 755 "$root/build/drc-hostap/hostapd/hostapd" "$new/build/drc-hostap/hostapd/"
+if [ -x "$root/bin/hostapd" ]; then
+  # AppImage: hostapd and the fallback tools, with the libraries they need (their RPATH is $ORIGIN/../lib)
+  mkdir -p "$new/bin" "$new/lib"
+  for f in hostapd iw dnsmasq ethtool; do
+    [ -x "$root/bin/$f" ] && install -m 755 "$root/bin/$f" "$new/bin/"
+  done
+  [ -d "$root/lib" ] && cp -a "$root/lib/." "$new/lib/"
+else
+  mkdir -p "$new/build/drc-hostap/hostapd"
+  install -m 755 "$root/build/drc-hostap/hostapd/hostapd" "$new/build/drc-hostap/hostapd/"
+fi
 rm -rf "$dest"; mv "$new" "$dest"
+# an install from before, in the other place
+for old in /usr/local/libexec/cemu-gamepad /var/lib/cemu-gamepad; do
+  [ "$old" = "$dest" ] || rm -rf "$old"
+done
 restorecon -R "$dest" 2>/dev/null || true
 
-install -m 644 "$root/packaging/cemu-gamepad-net.service" /etc/systemd/system/
+sed "s|@DEST@|$dest|" "$root/packaging/cemu-gamepad-net.service" > /etc/systemd/system/cemu-gamepad-net.service
+chmod 644 /etc/systemd/system/cemu-gamepad-net.service
 # GamePad setup writes a rule for the adapter the user chose; the packaged one (any rt2800usb) is the default.
 [ -f /etc/cemu-gamepad/setup ] || install -m 644 "$root/packaging/70-cemu-gamepad.rules" /etc/udev/rules.d/
 systemctl daemon-reload

@@ -1,4 +1,5 @@
 #include "Cafe/GamePad/GamePadSink.h"
+#include "Cafe/GamePad/GamePadBridgeProcess.h"
 #include "Cafe/GamePad/SyncPattern.h"
 #include "Cafe/GamePad/drcbridge_ipc.h"
 #include "Cafe/HW/Latte/Core/Latte.h"
@@ -23,6 +24,7 @@ namespace GamePadSink
 	namespace
 	{
 		constexpr sint64 kRetryIntervalNs = 5'000'000'000; // reconnect attempt while enabled but down
+		constexpr sint64 kStartingRetryNs = 500'000'000; // ...and while a bridge Cemu started is coming up
 		constexpr sint64 kMirrorAfterNs = 1'000'000'000; // no GamePad frame this long: show the TV picture
 		constexpr uint32 kPadWidth = 854, kPadHeight = 480;
 		constexpr sint64 kInputStaleNs = 500'000'000; // the pad sends input ~180 times a second
@@ -391,6 +393,12 @@ namespace GamePadSink
 			s.lastAttemptNs = now;
 			if (!TryConnect())
 			{
+				// Not running: start the bundled bridge, if the GamePad network is up. Retry soon, quietly, while it starts.
+				if (GamePadBridgeProcess::StartIfNeeded())
+				{
+					s.lastAttemptNs = now - kRetryIntervalNs + kStartingRetryNs;
+					return false;
+				}
 				// Visible, not just logged (CLAUDE.md: don't silently fall back). Once per outage.
 				if (!s.noticeShownForOutage)
 					Notice("GamePad Bridge is not running. Playing without the GamePad.", 10000);

@@ -20,7 +20,7 @@ if [ "${1:-}" = uninstall ]; then
   rm -f "$unit"; systemctl --user daemon-reload
   [ -L "$HOME/Applications/Cemu/Cemu" ] && rm "$HOME/Applications/Cemu/Cemu" && rmdir "$HOME/Applications/Cemu" 2>/dev/null
   [ -L "$HOME/.local/bin/cemu-gamepad-setup" ] && rm "$HOME/.local/bin/cemu-gamepad-setup"
-  sudo sh -c 'systemctl stop cemu-gamepad-net.service; rm -f /etc/systemd/system/cemu-gamepad-net.service /etc/udev/rules.d/70-cemu-gamepad.rules; rm -rf /usr/local/libexec/cemu-gamepad /etc/cemu-gamepad; systemctl daemon-reload; udevadm control --reload'
+  sudo sh -c 'systemctl stop cemu-gamepad-net.service; rm -f /etc/systemd/system/cemu-gamepad-net.service /etc/udev/rules.d/70-cemu-gamepad.rules; rm -rf /usr/local/libexec/cemu-gamepad /var/lib/cemu-gamepad /etc/cemu-gamepad; systemctl daemon-reload; udevadm control --reload'
   echo "uninstalled"; exit 0
 fi
 

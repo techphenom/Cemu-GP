@@ -36,13 +36,14 @@ chmod +x AppDir/usr/bin/Cemu
 
 cp /usr/lib/"${CPU_ARCH}"-linux-gnu/{libsepol.so.1,libffi.so.7,libpcre.so.3,libGLU.so.1,libthai.so.0} AppDir/usr/lib
 
-export UPD_INFO="gh-releases-zsync|cemu-project|Cemu|ci|Cemu.AppImage.zsync"
+# No UPD_INFO (fork): upstream's would let AppImage updaters replace this build with official Cemu.
 export NO_STRIP=1
 ./linuxdeploy-"${CPU_ARCH}".AppImage --appimage-extract-and-run \
   --appdir="${GITHUB_WORKSPACE}"/AppDir/ \
   -d "${GITHUB_WORKSPACE}"/AppDir/info.cemu.Cemu.desktop \
   -i "${GITHUB_WORKSPACE}"/AppDir/info.cemu.Cemu.png \
   -e "${GITHUB_WORKSPACE}"/AppDir/usr/bin/Cemu \
+  --custom-apprun=dist/linux/AppRun \
   --plugin gtk \
   --plugin checkrt
 
@@ -53,6 +54,13 @@ echo "Cemu Version Cemu-${GITVERSION}"
 
 rm AppDir/usr/lib/libwayland-client.so.0
 echo -e "export LC_ALL=C\nexport FONTCONFIG_PATH=/etc/fonts" >> AppDir/apprun-hooks/linuxdeploy-plugin-gtk.sh
+# The GamePad bridge (fork), after linuxdeploy: its programs carry their own libraries (bundle-gamepad.sh)
+if [ -x gamepad-bridge/build/bridge/cemu-gamepad-bridge ]; then
+	dist/linux/bundle-gamepad.sh AppDir || exit 1
+else
+	echo "GamePad bridge not built (gamepad-bridge/build.sh): the AppImage won't include it"
+fi
+
 VERSION="${GITVERSION}" ./mkappimage.AppImage --appimage-extract-and-run "${GITHUB_WORKSPACE}"/AppDir
 
 mkdir -p "${GITHUB_WORKSPACE}"/artifacts/

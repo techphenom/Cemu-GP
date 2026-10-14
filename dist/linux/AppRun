@@ -1,0 +1,12 @@
+#!/bin/sh
+# Cemu's AppImage entry point (fork). "Cemu.AppImage gamepad-setup <command>" runs the GamePad setup helper, which
+# Cemu's Set up GamePad window uses (through pkexec for the root steps: root can't read inside the user's AppImage
+# mount, but it can run the AppImage). Anything else starts Cemu.
+here=$(dirname "$(readlink -f "$0")")
+if [ "${1:-}" = gamepad-setup ]; then
+	shift
+	# linuxdeploy's checkrt preload is for Cemu; the setup scripts don't need it (and it crashes /usr/bin/env)
+	unset LD_PRELOAD
+	exec "$here/usr/lib/cemu-gamepad/scripts/gamepad-setup.sh" "$@"
+fi
+exec "$here/usr/bin/Cemu" "$@"
