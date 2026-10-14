@@ -21,6 +21,7 @@ for tool in iw dnsmasq ethtool; do
 	install -m 755 "$path" "$out/bin/"
 done
 install -m 755 "$src"/scripts/{gamepad-setup.sh,pad-net.sh,install-system.sh} "$out/scripts/"
+install -m 644 "$src/scripts/iwd.sh" "$out/scripts/"
 install -m 644 "$src/scripts/make-wps-cred.py" "$out/scripts/"
 install -m 644 "$src"/harness/*.conf "$out/harness/"
 install -m 644 "$src"/packaging/{cemu-gamepad-net.service,70-cemu-gamepad.rules} "$out/packaging/"

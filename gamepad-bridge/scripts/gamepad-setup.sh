@@ -35,6 +35,7 @@ else
   hostapd_cli=$root/build/drc-hostap/hostapd/hostapd_cli
   tsf_probe=$root/build/bridge/tsf-probe
 fi
+. "$root/scripts/iwd.sh"
 etc=/etc/cemu-gamepad
 PAD_CHANNELS="36 40 44 48 149 153 157 161 165"   # 5 GHz channels without radar detection; 165 is what we play on
 PAIR_CHANNELS="36 44 149"   # the pad found the pairing AP on 36 in ~6 s every time (docs/PAIRING.md:11, :82)
@@ -159,7 +160,7 @@ cmd_setup() {
   # Not local: restore() runs from the EXIT trap after this function has returned, when its locals are gone
   # (set -u then killed restore halfway on the first successful run: no network restart, Cemu waited forever).
   local phy chans name
-  ifc_g=$ifc perm="" tmp="" svc_was_active=0 hp="" done_ok=0
+  ifc_g=$ifc perm="" tmp="" svc_was_active=0 hp="" done_ok=0 iwd_released=0
   phy=$(basename "$(readlink -f "/sys/class/net/$ifc/phy80211")")
   name=$(adapter_name "/sys/class/net/$ifc/device" "$(basename "$(readlink -f "/sys/class/net/$ifc/device/subsystem")")")
   perm=$(perm_mac "$ifc")
@@ -171,20 +172,31 @@ cmd_setup() {
     # Back to a plain station before anyone else gets it: NetworkManager's wpa_supplicant crashed (SEGV, every 10 s,
     # taking the laptop's internet down each time, until a reboot) when it was handed this adapter still in AP mode.
     ip link set "$ifc_g" down; iw dev "$ifc_g" set type managed; ip link set "$ifc_g" address "$perm"; ip link set "$ifc_g" up
-    rm -rf "$tmp"
+    rm -rf "$tmp" /run/cemu-gamepad/setup-active
     if [ "$done_ok" = 1 ]; then
-      systemctl restart --no-block cemu-gamepad-net.service   # takes over the adapter with the new pairing
+      systemctl restart --no-block cemu-gamepad-net.service   # takes over the adapter with the new pairing (iwd stays off it)
     else
       nmcli device set "$ifc_g" managed yes
-      [ "$svc_was_active" = 1 ] && systemctl start --no-block cemu-gamepad-net.service
+      if [ "$svc_was_active" = 1 ]; then
+        systemctl start --no-block cemu-gamepad-net.service   # keeps it from iwd too: no need to hand it back first
+      elif [ "$iwd_released" = 1 ]; then
+        iwd_restore
+      fi
     fi
   }
   trap restore EXIT
+  # pad-net.sh stays out while we have the adapter: iwd's restart below removes and adds interfaces, and udev starts
+  # the network service for any new interface on this adapter (70-cemu-gamepad.rules)
+  mkdir -p /run/cemu-gamepad; echo $$ > /run/cemu-gamepad/setup-active
   if systemctl is-active -q cemu-gamepad-net.service; then
     svc_was_active=1
     systemctl stop cemu-gamepad-net.service
   fi
   pgrep -f "hostapd.*$ifc" && fail "another program is using this adapter"
+  if iwd_active; then
+    ifc=$(iwd_release "$ifc") || fail "couldn't take the adapter from iwd (the system's Wi-Fi service)"
+    ifc_g=$ifc iwd_released=1
+  fi
   # Always take it from NetworkManager, after the service stop above: stopping the service hands it back to NM, and
   # an adapter NM still manages can't start an access point ("can't host" on the first real run, 2026-10-09).
   nmcli device set "$ifc" managed no; sleep 1
@@ -199,7 +211,12 @@ cmd_setup() {
     grep -qE 'AP-ENABLED|AP-DISABLED' "$tmp/test.log" && break; kill -0 "$hp" 2>/dev/null || break; sleep 0.5
   done
   cat "$tmp/test.log"
-  grep -q AP-ENABLED "$tmp/test.log" || fail "this adapter can't host the GamePad's network"
+  if ! grep -q AP-ENABLED "$tmp/test.log"; then
+    # EBUSY: something still holds the radio (iwd or wpa_supplicant), not a limit of the adapter
+    grep -q 'Device or resource busy' "$tmp/test.log" &&
+      fail "another program is still using this adapter ($(iwd_active && echo iwd || echo "the system's Wi-Fi service"))"
+    fail "this adapter can't host the GamePad's network"
+  fi
   ip addr add 192.168.1.10/24 dev "$ifc"   # libdrc finds the adapter by this address, as the bridge does
   local out; out=$("$tsf_probe" 2>&1); echo "$out"
   local n=0 good=0 x
@@ -292,6 +309,7 @@ cmd_reset() {
     ip link set "$(basename "$d")" address "$p"; ip link set "$(basename "$d")" up
     nmcli device set "$(basename "$d")" managed yes
   done
+  iwd_restore   # and iwd's again, where iwd runs
   echo "GamePad setup reset. Open Cemu > Settings > GamePad > Set up GamePad to start over."
 }
 

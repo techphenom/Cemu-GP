@@ -29,6 +29,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 # bin/: the AppImage's bundled programs (dist/linux/appimage.sh). The system's iw, dnsmasq and ethtool come first;
 # the bundled ones are for systems without them (SteamOS can't keep installed packages across updates).
 PATH=$PATH:$root/bin
+. "$root/scripts/iwd.sh"
 hostapd=$root/bin/hostapd
 [ -x "$hostapd" ] || hostapd=$root/build/drc-hostap/hostapd/hostapd
 SERVICE=${SERVICE:-0}
@@ -71,8 +72,17 @@ if pgrep -f "(drc-hostap/hostapd|cemu-gamepad/bin)/hostapd " >/dev/null; then   
   echo "Ctrl-C it in its terminal, or if that terminal is gone:  sudo pkill -f build/drc-hostap/hostapd/hostapd; sudo pkill -f 'dnsmasq --conf-file=$root/runs'" >&2
   exit 1
 fi
+# GamePad setup has the adapter (it may be restarting iwd, which makes udev start us): it starts us itself when done
+lock=$(cat /run/cemu-gamepad/setup-active 2>/dev/null)
+[ -n "$lock" ] && kill -0 "$lock" 2>/dev/null && { echo "GamePad setup is running; it starts the network when it's done"; exit 0; }
 IF=$(rtif)
 [ -n "$IF" ] || { echo "the GamePad's Wi-Fi adapter isn't plugged in" >&2; exit 0; }
+# iwd (SteamOS) ignores NetworkManager's "managed no" and keeps the radio busy: restart it without this adapter
+# (scripts/iwd.sh). It stays that way until the adapter is unplugged or setup is reset, so a service restart doesn't
+# cost the PC's Wi-Fi another few seconds.
+if iwd_active; then
+  IF=$(iwd_release "$IF") || { echo "couldn't take $IF from iwd" >&2; exit 1; }
+fi
 # Channels this adapter may start a network on: not disabled, no "no IR", no radar detection
 ap_channel_ok() {
   iw phy "$(basename "$(readlink -f "/sys/class/net/$IF/phy80211")")" channels 2>/dev/null | awk -v ch="$1" '
@@ -175,7 +185,7 @@ tcpdump -i "$IF" -U -s "$([ "${FULL:-0}" = 1 ] && echo 0 || echo 96)" -w "$R/pad
 fi
 # Until hostapd exits (an error: exit 1, the service restarts it) or the adapter is unplugged (exit 0).
 while kill -0 "${pids[0]}" 2>/dev/null; do
-  [ -e "/sys/class/net/$IF" ] || { echo "the RT5572 was unplugged"; exit 0; }
+  [ -e "/sys/class/net/$IF" ] || { echo "the RT5572 was unplugged"; iwd_forget; exit 0; }
   sleep 2
 done
 echo "hostapd exited"

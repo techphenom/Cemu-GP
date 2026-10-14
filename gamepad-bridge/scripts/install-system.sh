@@ -14,6 +14,7 @@ new=$dest.new
 rm -rf "$new"
 mkdir -p "$new/scripts" "$new/harness"
 install -m 755 "$root/scripts/pad-net.sh" "$new/scripts/"
+install -m 644 "$root/scripts/iwd.sh" "$new/scripts/"
 install -m 644 "$root/harness/dnsmasq.conf" "$new/harness/"
 install -m 600 "$root/harness/hostapd-normal.conf" "$new/harness/"   # template; the key comes from /etc/cemu-gamepad/pad.conf
 if [ -x "$root/bin/hostapd" ]; then
@@ -41,7 +42,9 @@ chmod 644 /etc/systemd/system/cemu-gamepad-net.service
 systemctl daemon-reload
 udevadm control --reload
 # A pad-net.sh still running by hand holds the adapter; the service takes over from it.
-rt=$(for d in /sys/class/net/*; do [ "$(basename "$(readlink -f "$d/device/driver" 2>/dev/null)")" = rt2800usb ] && basename "$d"; done | head -1)
+# if/fi, not "[ ] && basename": with set -e and pipefail, a loop whose last test fails (the RT5572 isn't the last
+# interface, as on SteamOS) failed this assignment and ended the script silently
+rt=$(for d in /sys/class/net/*; do if [ "$(basename "$(readlink -f "$d/device/driver" 2>/dev/null)")" = rt2800usb ]; then basename "$d"; fi; done | head -1)
 if [ "${1:-}" = --no-start ]; then
   :   # GamePad setup starts it itself, once the adapter is free
 elif pgrep -f "^$root/build/drc-hostap/hostapd/hostapd " >/dev/null; then

@@ -3,7 +3,8 @@
 # scripts/install-system.sh, which fills in @DEST@. Logs: journalctl -u cemu-gamepad-net, /var/log/cemu-gamepad/
 [Unit]
 Description=Wii U GamePad network (RT5572 access point)
-After=NetworkManager.service firewalld.service
+# iwd: at boot, iwd must be up before pad-net.sh looks for it (or it takes the adapter from a running network)
+After=NetworkManager.service firewalld.service iwd.service
 Wants=NetworkManager.service
 StartLimitIntervalSec=300
 StartLimitBurst=5
